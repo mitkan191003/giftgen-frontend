@@ -1,10 +1,11 @@
+import type { Route } from "next";
 import Link from "next/link";
 
 const navItems = [
   { href: "/", label: "Overview" },
   { href: "/studio", label: "Studio" },
   { href: "/creations", label: "Creations" }
-];
+] as const satisfies ReadonlyArray<{ href: Route; label: string }>;
 
 export function SiteHeader() {
   return (

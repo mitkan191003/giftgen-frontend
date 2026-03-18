@@ -1,18 +1,15 @@
 import type { Metadata } from "next";
-import { Fraunces, Space_Grotesk } from "next/font/google";
+import "@fontsource/space-grotesk/400.css";
+import "@fontsource/space-grotesk/500.css";
+import "@fontsource/space-grotesk/600.css";
+import "@fontsource/space-grotesk/700.css";
+import "@fontsource/fraunces/400.css";
+import "@fontsource/fraunces/500.css";
+import "@fontsource/fraunces/600.css";
+import "@fontsource/fraunces/700.css";
 
 import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
-
-const sans = Space_Grotesk({
-  subsets: ["latin"],
-  variable: "--font-sans"
-});
-
-const serif = Fraunces({
-  subsets: ["latin"],
-  variable: "--font-serif"
-});
 
 export const metadata: Metadata = {
   title: "GiftGen",
@@ -21,7 +18,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${sans.variable} ${serif.variable}`}>
+    <html lang="en">
       <body className="font-[var(--font-sans)] antialiased">
         <SiteHeader />
         {children}
