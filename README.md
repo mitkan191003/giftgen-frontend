@@ -1,27 +1,54 @@
 # GiftGen Frontend
 
-Next.js frontend for the gift creation, queue tracking, and sharing experience.
+This frontend is a port of the old reference experience onto the current stack:
 
-## What This Scaffold Covers
+- Cognito Hosted UI with PKCE for real auth
+- FastAPI backend on AWS for creations, jobs, shares, and asset delivery
+- Modal generation invoked through the backend
+- S3 or local backend storage for generated models
 
-- Marketing landing page with the product story
-- Studio page that shows the intended chat-to-generation workflow
-- Creations page shaped around queued, running, and completed work
-- Share page contract for public and unlisted creations
-- Typed mock data that mirrors the backend schema closely enough to swap in real API calls later
+There is no Supabase or frontend-owned API layer in this app anymore. The Next app talks directly to the backend.
 
-## Architecture Direction
+## Core Flows
 
-- Deploy on Vercel
-- Use Cognito hosted login with PKCE
-- Keep access tokens out of client storage where possible
-- Treat backend data as server state and hydrate via route handlers or server components
-- Use polling first for generation status, upgrade to SSE when the backend is ready
+- `/`: sign in through Cognito or use development auth when Cognito is not configured
+- `/studio`: generate a gift, poll the backend job, preview the model, and create a share link
+- `/my-gifts`: browse the current user’s generated gifts
+- `/unwrap` and `/share/[slug]`: load a public or unlisted shared gift and reveal it in the 3D viewer
 
-## Local Development
+## Environment
 
-1. Install dependencies.
-2. Set `NEXT_PUBLIC_BACKEND_URL` if you want to call the backend directly later.
-3. Run `npm run dev`.
+Copy `.env.example` to `.env.local` and fill in the real values for the environment you are running:
 
-This initial scaffold uses local mock data so the UI can be iterated independently of AWS infrastructure.
+```bash
+cp .env.example .env.local
+```
+
+Variables:
+
+- `NEXT_PUBLIC_BACKEND_URL`: base URL for the FastAPI backend, for example `https://api-dev.giftgen.mithrak.com`
+- `NEXT_PUBLIC_BACKEND_AUTH_MODE`: `development` until the backend verifies Cognito JWTs, then `cognito`
+- `NEXT_PUBLIC_AUTH_MODE`: `development` or `cognito`
+- `NEXT_PUBLIC_COGNITO_DOMAIN`: Cognito Hosted UI domain
+- `NEXT_PUBLIC_COGNITO_CLIENT_ID`: Cognito app client id for the frontend
+- `NEXT_PUBLIC_COGNITO_REDIRECT_URI`: exact callback URL registered in Cognito
+- `NEXT_PUBLIC_COGNITO_LOGOUT_URI`: exact logout URL registered in Cognito
+
+## Development
+
+```bash
+pnpm install
+pnpm run dev
+```
+
+## Build
+
+```bash
+pnpm run build
+```
+
+## Notes
+
+- The reference 3D experience, studio layout, unwrap flow, and share flow were kept and adapted to the current backend contracts.
+- Asset rendering now depends on backend asset URLs rather than direct storage-provider URLs.
+- Until backend JWT validation is implemented, Cognito-authenticated users can still bridge into the current development auth mode by setting `NEXT_PUBLIC_BACKEND_AUTH_MODE=development`.
