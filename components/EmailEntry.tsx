@@ -164,12 +164,6 @@ export default function EmailEntry() {
             </form>
           )}
 
-          {showDevelopmentFallback && isCognitoConfigured() && (
-            <p className="mt-4 text-xs text-slate-500">
-              Backend auth is still in development mode, so authenticated API calls will bridge through the current user email until backend JWT verification lands.
-            </p>
-          )}
-
           {error && <p className="mt-4 text-sm text-rose-400">{error}</p>}
         </div>
 

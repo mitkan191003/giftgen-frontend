@@ -27,12 +27,18 @@ cp .env.example .env.local
 Variables:
 
 - `NEXT_PUBLIC_BACKEND_URL`: base URL for the FastAPI backend, for example `https://api-dev.giftgen.mithrak.com`
-- `NEXT_PUBLIC_BACKEND_AUTH_MODE`: `development` until the backend verifies Cognito JWTs, then `cognito`
+- `NEXT_PUBLIC_BACKEND_AUTH_MODE`: `cognito` for deployed environments, `development` only for local fallback mode
 - `NEXT_PUBLIC_AUTH_MODE`: `development` or `cognito`
 - `NEXT_PUBLIC_COGNITO_DOMAIN`: Cognito Hosted UI domain
 - `NEXT_PUBLIC_COGNITO_CLIENT_ID`: Cognito app client id for the frontend
 - `NEXT_PUBLIC_COGNITO_REDIRECT_URI`: exact callback URL registered in Cognito
 - `NEXT_PUBLIC_COGNITO_LOGOUT_URI`: exact logout URL registered in Cognito
+
+Deployed environment recommendation:
+
+- Dev, staging, and prod should all use `NEXT_PUBLIC_AUTH_MODE=cognito`
+- Dev, staging, and prod should all use `NEXT_PUBLIC_BACKEND_AUTH_MODE=cognito`
+- `development` mode should only be used for local iteration when you intentionally are not using Cognito
 
 ## Development
 
@@ -51,4 +57,4 @@ pnpm run build
 
 - The reference 3D experience, studio layout, unwrap flow, and share flow were kept and adapted to the current backend contracts.
 - Asset rendering now depends on backend asset URLs rather than direct storage-provider URLs.
-- Until backend JWT validation is implemented, Cognito-authenticated users can still bridge into the current development auth mode by setting `NEXT_PUBLIC_BACKEND_AUTH_MODE=development`.
+- The frontend now sends the Cognito ID token as the backend bearer token when backend auth mode is `cognito`.

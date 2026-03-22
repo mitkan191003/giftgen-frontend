@@ -27,6 +27,7 @@ export interface AssetRecord {
 
 export interface CreationRecord {
   id: string;
+  source_thread_id: string | null;
   title: string;
   final_prompt: string;
   status: string;
@@ -73,6 +74,31 @@ export interface PublicShareRecord {
   share_type: string;
   owner_display_name: string | null;
   assets: AssetRecord[];
+}
+
+export interface ChatMessageRecord {
+  id: string;
+  role: string;
+  content: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ThreadRecord {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ThreadDetailRecord extends ThreadRecord {
+  messages: ChatMessageRecord[];
+}
+
+export interface MessageExchangeRecord {
+  user_message: ChatMessageRecord;
+  assistant_message: ChatMessageRecord;
+  suggested_prompt: string;
 }
 
 export interface GiftObject {

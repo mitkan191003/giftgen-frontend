@@ -5,8 +5,11 @@ import type {
   CreationEnvelope,
   CreationRecord,
   GenerationJobRecord,
+  MessageExchangeRecord,
   PublicShareRecord,
   ShareRecord,
+  ThreadDetailRecord,
+  ThreadRecord,
 } from "@/types/database";
 
 const BACKEND_URL =
@@ -32,6 +35,11 @@ function getBackendAuthMode(): "development" | "cognito" {
   return process.env.NEXT_PUBLIC_BACKEND_AUTH_MODE === "cognito" ? "cognito" : "development";
 }
 
+interface BackendErrorDetail {
+  message?: string;
+  reasons?: string[];
+}
+
 function buildHeaders(auth?: BackendAuthContext): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -41,8 +49,8 @@ function buildHeaders(auth?: BackendAuthContext): Record<string, string> {
     return headers;
   }
 
-  if (getBackendAuthMode() === "cognito" && auth.session?.accessToken) {
-    headers.Authorization = `Bearer ${auth.session.accessToken}`;
+  if (getBackendAuthMode() === "cognito" && (auth.session?.idToken || auth.session?.accessToken)) {
+    headers.Authorization = `Bearer ${auth.session?.idToken || auth.session?.accessToken}`;
     return headers;
   }
 
@@ -79,12 +87,16 @@ export async function backendFetch<T = unknown>(
     if (!response.ok) {
       const text = await response.text();
       try {
-        const parsed = JSON.parse(text) as { detail?: string | { message?: string } };
+        const parsed = JSON.parse(text) as { detail?: string | BackendErrorDetail };
         if (typeof parsed.detail === "string") {
           return { data: null, error: parsed.detail, status: response.status };
         }
         if (parsed.detail && typeof parsed.detail === "object" && parsed.detail.message) {
-          return { data: null, error: parsed.detail.message, status: response.status };
+          const reasons =
+            Array.isArray(parsed.detail.reasons) && parsed.detail.reasons.length > 0
+              ? ` (${parsed.detail.reasons.join(", ")})`
+              : "";
+          return { data: null, error: `${parsed.detail.message}${reasons}`, status: response.status };
         }
       } catch {
         // ignore
@@ -147,7 +159,11 @@ export function inferModelFormat(asset: AssetRecord): string {
 export async function createCreation(
   prompt: string,
   title: string,
-  auth: BackendAuthContext
+  auth: BackendAuthContext,
+  options?: {
+    sourceThreadId?: string;
+    visibility?: "private" | "unlisted" | "public";
+  }
 ): Promise<CreationEnvelope> {
   const { data, error, status } = await backendFetch<CreationEnvelope>(`${API_PREFIX}/creations`, {
     method: "POST",
@@ -155,7 +171,8 @@ export async function createCreation(
     body: {
       title,
       prompt,
-      visibility: "private",
+      source_thread_id: options?.sourceThreadId,
+      visibility: options?.visibility ?? "private",
     },
     timeout: 30000,
   });
@@ -190,6 +207,76 @@ export async function listCreations(auth: BackendAuthContext): Promise<CreationR
 
   if (!data) {
     throw new Error(error || `Failed to fetch creations (${status})`);
+  }
+
+  return data;
+}
+
+export async function createThread(
+  title: string | null,
+  auth: BackendAuthContext
+): Promise<ThreadRecord> {
+  const { data, error, status } = await backendFetch<ThreadRecord>(`${API_PREFIX}/threads`, {
+    method: "POST",
+    auth,
+    body: {
+      title,
+    },
+    timeout: 30000,
+  });
+
+  if (!data) {
+    throw new Error(error || `Failed to create thread (${status})`);
+  }
+
+  return data;
+}
+
+export async function listThreads(auth: BackendAuthContext): Promise<ThreadRecord[]> {
+  const { data, error, status } = await backendFetch<ThreadRecord[]>(`${API_PREFIX}/threads`, {
+    method: "GET",
+    auth,
+    timeout: 30000,
+  });
+
+  if (!data) {
+    throw new Error(error || `Failed to fetch threads (${status})`);
+  }
+
+  return data;
+}
+
+export async function getThread(threadId: string, auth: BackendAuthContext): Promise<ThreadDetailRecord> {
+  const { data, error, status } = await backendFetch<ThreadDetailRecord>(`${API_PREFIX}/threads/${threadId}`, {
+    method: "GET",
+    auth,
+    timeout: 30000,
+  });
+
+  if (!data) {
+    throw new Error(error || `Failed to fetch thread (${status})`);
+  }
+
+  return data;
+}
+
+export async function createThreadMessage(
+  threadId: string,
+  content: string,
+  auth: BackendAuthContext
+): Promise<MessageExchangeRecord> {
+  const { data, error, status } = await backendFetch<MessageExchangeRecord>(
+    `${API_PREFIX}/threads/${threadId}/messages`,
+    {
+      method: "POST",
+      auth,
+      body: { content },
+      timeout: 30000,
+    }
+  );
+
+  if (!data) {
+    throw new Error(error || `Failed to create thread message (${status})`);
   }
 
   return data;
