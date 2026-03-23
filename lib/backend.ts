@@ -337,7 +337,7 @@ export async function waitForCreationReady(
 
     progress = Math.min(progress + 8, 92);
     onProgress?.(progress);
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await new Promise((resolve) => setTimeout(resolve, 10000));
   }
 }
 
