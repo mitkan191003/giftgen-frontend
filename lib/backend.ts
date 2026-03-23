@@ -1,3 +1,5 @@
+import * as Sentry from "@sentry/nextjs";
+
 import type {
   AppUser,
   AssetRecord,
@@ -40,9 +42,17 @@ interface BackendErrorDetail {
   reasons?: string[];
 }
 
-function buildHeaders(auth?: BackendAuthContext): Record<string, string> {
+function generateRequestId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function buildHeaders(auth: BackendAuthContext | undefined, requestId: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "X-Request-Id": requestId,
   };
 
   if (!auth?.user) {
@@ -73,11 +83,12 @@ export async function backendFetch<T = unknown>(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const requestId = generateRequestId();
 
   try {
     const response = await fetch(`${BACKEND_URL}${endpoint}`, {
       method,
-      headers: buildHeaders(auth),
+      headers: buildHeaders(auth, requestId),
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
@@ -89,19 +100,23 @@ export async function backendFetch<T = unknown>(
       try {
         const parsed = JSON.parse(text) as { detail?: string | BackendErrorDetail };
         if (typeof parsed.detail === "string") {
-          return { data: null, error: parsed.detail, status: response.status };
+          return { data: null, error: `${parsed.detail} [request_id=${requestId}]`, status: response.status };
         }
         if (parsed.detail && typeof parsed.detail === "object" && parsed.detail.message) {
           const reasons =
             Array.isArray(parsed.detail.reasons) && parsed.detail.reasons.length > 0
               ? ` (${parsed.detail.reasons.join(", ")})`
               : "";
-          return { data: null, error: `${parsed.detail.message}${reasons}`, status: response.status };
+          return {
+            data: null,
+            error: `${parsed.detail.message}${reasons} [request_id=${requestId}]`,
+            status: response.status,
+          };
         }
       } catch {
         // ignore
       }
-      return { data: null, error: text || "Request failed", status: response.status };
+      return { data: null, error: `${text || "Request failed"} [request_id=${requestId}]`, status: response.status };
     }
 
     if (response.status === 204) {
@@ -116,11 +131,24 @@ export async function backendFetch<T = unknown>(
   } catch (error) {
     clearTimeout(timeoutId);
     if (error instanceof Error && error.name === "AbortError") {
-      return { data: null, error: "Request timed out", status: 504 };
+      return { data: null, error: `Request timed out [request_id=${requestId}]`, status: 504 };
     }
+    Sentry.captureException(error, {
+      tags: {
+        endpoint,
+        request_id: requestId,
+      },
+      extra: {
+        backendUrl: BACKEND_URL,
+        method,
+      },
+    });
     return {
       data: null,
-      error: error instanceof Error ? error.message : "Unknown error",
+      error:
+        error instanceof Error
+          ? `${error.message} [request_id=${requestId}]`
+          : `Unknown error [request_id=${requestId}]`,
       status: 500,
     };
   }

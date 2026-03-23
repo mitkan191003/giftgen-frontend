@@ -33,6 +33,12 @@ Variables:
 - `NEXT_PUBLIC_COGNITO_CLIENT_ID`: Cognito app client id for the frontend
 - `NEXT_PUBLIC_COGNITO_REDIRECT_URI`: exact callback URL registered in Cognito
 - `NEXT_PUBLIC_COGNITO_LOGOUT_URI`: exact logout URL registered in Cognito
+- `NEXT_PUBLIC_SENTRY_DSN`: optional browser-side Sentry DSN
+- `NEXT_PUBLIC_SENTRY_ENVIRONMENT`: optional frontend Sentry environment label
+- `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE`: optional frontend trace sampling rate
+- `SENTRY_DSN`: optional server-side Sentry DSN for Next.js runtime errors
+- `SENTRY_ENVIRONMENT`: optional server-side Sentry environment label
+- `SENTRY_TRACES_SAMPLE_RATE`: optional server-side trace sampling rate
 
 Deployed environment recommendation:
 
@@ -58,3 +64,5 @@ pnpm run build
 - The reference 3D experience, studio layout, unwrap flow, and share flow were kept and adapted to the current backend contracts.
 - Asset rendering now depends on backend asset URLs rather than direct storage-provider URLs.
 - The frontend now sends the Cognito ID token as the backend bearer token when backend auth mode is `cognito`.
+- The frontend now generates an `X-Request-Id` for every backend request so browser failures can be correlated with API logs.
+- Sentry is wired for App Router projects but remains dormant until the DSN env vars are set.
