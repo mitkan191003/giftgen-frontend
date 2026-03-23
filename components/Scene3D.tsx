@@ -1,42 +1,101 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Environment, Grid } from "@react-three/drei";
+import { OrbitControls, Grid } from "@react-three/drei";
 import {
 	Suspense,
-	useRef,
 	useEffect,
 	useState,
 	useMemo,
 	useCallback,
 } from "react";
 import * as THREE from "three";
+import { fetchAssetBinary, type BackendAuthContext } from "@/lib/backend";
 import { useAppStore } from "@/lib/store";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-// Convert base64 data URL to Blob URL (more memory efficient)
-function dataURLtoBlobURL(
-	dataURL: string,
-	mimeType: string = "application/octet-stream"
-): string | null {
-	try {
-		const base64Data = dataURL.split(",")[1];
-		if (!base64Data) return null;
-
-		const binaryString = atob(base64Data);
-		const bytes = new Uint8Array(binaryString.length);
-		for (let i = 0; i < binaryString.length; i++) {
-			bytes[i] = binaryString.charCodeAt(i);
-		}
-
-		const blob = new Blob([bytes], { type: mimeType });
-		return URL.createObjectURL(blob);
-	} catch (e) {
-		console.error("dataURLtoBlobURL error:", e);
-		return null;
+function detectModelFormat(
+	sourceUrl: string,
+	explicitFormat?: string,
+	contentType?: string,
+	bytes?: ArrayBuffer
+): string {
+	if (explicitFormat) {
+		return explicitFormat.toLowerCase();
 	}
+
+	const normalizedType = (contentType || "").toLowerCase();
+	if (normalizedType.includes("model/gltf-binary") || normalizedType.includes("glb")) {
+		return "glb";
+	}
+	if (normalizedType.includes("model/gltf+json") || normalizedType.includes("gltf")) {
+		return "gltf";
+	}
+	if (normalizedType.includes("ply")) {
+		return "ply";
+	}
+	if (normalizedType.includes("obj")) {
+		return "obj";
+	}
+
+	if (bytes && bytes.byteLength >= 4) {
+		const signature = new TextDecoder().decode(new Uint8Array(bytes, 0, 4));
+		if (signature === "glTF") {
+			return "glb";
+		}
+		if (signature.toLowerCase() === "ply\n") {
+			return "ply";
+		}
+	}
+
+	const extension = sourceUrl.split(".").pop()?.toLowerCase();
+	return extension || "unknown";
+}
+
+function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
+	const disposeSingleMaterial = (value: THREE.Material) => {
+		for (const slot of ["map", "normalMap", "roughnessMap", "metalnessMap", "aoMap", "emissiveMap"] as const) {
+			const texture = (value as THREE.MeshStandardMaterial)[slot];
+			texture?.dispose();
+		}
+		value.dispose();
+	};
+
+	if (Array.isArray(material)) {
+		material.forEach(disposeSingleMaterial);
+		return;
+	}
+
+	disposeSingleMaterial(material);
+}
+
+function disposeObject3D(object: THREE.Object3D | null): void {
+	if (!object) {
+		return;
+	}
+
+	object.traverse((child) => {
+		if (child instanceof THREE.Mesh) {
+			child.geometry.dispose();
+			disposeMaterial(child.material);
+		}
+	});
+}
+
+function normalizeMaterial(material: THREE.Material): THREE.Material {
+	const clone = material.clone();
+	clone.side = THREE.DoubleSide;
+
+	if (clone instanceof THREE.MeshStandardMaterial) {
+		clone.metalness = Math.min(clone.metalness, 0.25);
+		clone.roughness = Math.max(clone.roughness, 0.6);
+		clone.envMapIntensity = 1.2;
+		clone.needsUpdate = true;
+	}
+
+	return clone;
 }
 
 interface ModelProps {
@@ -45,7 +104,7 @@ interface ModelProps {
 	position: [number, number, number];
 	rotation: [number, number, number];
 	scale: [number, number, number];
-	id: string;
+	auth?: BackendAuthContext;
 	isSelected: boolean;
 	onSelect: () => void;
 }
@@ -56,179 +115,90 @@ function Model({
 	position,
 	rotation,
 	scale,
-	id,
+	auth,
 	isSelected,
 	onSelect,
 }: ModelProps) {
-	const meshRef = useRef<THREE.Mesh>(null);
 	const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
-	const [material, setMaterial] = useState<
-		THREE.Material | THREE.Material[] | null
-	>(null);
+	const [sceneObject, setSceneObject] = useState<THREE.Object3D | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [modelScale, setModelScale] = useState<number>(1);
 	const [hasVertexColors, setHasVertexColors] = useState(false);
-	const [hasTexture, setHasTexture] = useState(false);
-	const blobUrlRef = useRef<string | null>(null);
 
-	// Cleanup on unmount
-	useEffect(() => {
-		return () => {
-			if (geometry) {
-				geometry.dispose();
-			}
-			if (material) {
-				if (Array.isArray(material)) {
-					material.forEach((m) => m.dispose());
-				} else {
-					material.dispose();
-				}
-			}
-			if (blobUrlRef.current) {
-				URL.revokeObjectURL(blobUrlRef.current);
-			}
-		};
-	}, []);
+	useEffect(() => () => geometry?.dispose(), [geometry]);
+	useEffect(() => () => disposeObject3D(sceneObject), [sceneObject]);
 
 	useEffect(() => {
 		let cancelled = false;
 
 		const loadModel = async () => {
-			// Cleanup previous blob URL
-			if (blobUrlRef.current) {
-				URL.revokeObjectURL(blobUrlRef.current);
-				blobUrlRef.current = null;
-			}
-
 			try {
-				const isDataUrl = url.startsWith("data:");
-				let format = explicitFormat || "unknown"; // Use explicit format if provided
-				let loadUrl = url;
+				setError(null);
+				setGeometry(null);
+				setSceneObject(null);
+				setHasVertexColors(false);
 
-				if (isDataUrl) {
-					// Use explicit format if provided, otherwise default to glb
-					if (!explicitFormat) {
-						// Only check MIME type, not the entire base64 data
-						const mimeType = url.split(";")[0].split(":")[1] || "";
-						if (mimeType.includes("ply")) {
-							format = "ply";
-						} else if (mimeType.includes("gltf") || mimeType.includes("glb")) {
-							format = "glb";
-						} else {
-							// Default to GLB for TRELLIS
-							format = "glb";
-						}
-					}
-					// Convert to blob URL with correct MIME type for GLB
-					const mimeType =
-						format === "glb" ? "model/gltf-binary" : "application/octet-stream";
-					const blobUrl = dataURLtoBlobURL(url, mimeType);
-					if (blobUrl) {
-						blobUrlRef.current = blobUrl;
-						loadUrl = blobUrl;
-					}
-				} else if (!explicitFormat) {
-					const extension = url.split(".").pop()?.toLowerCase();
-					format = extension || "unknown";
-				}
+				const inlineResponse = url.startsWith("data:") || url.startsWith("blob:")
+					? await fetch(url)
+					: null;
+				const remoteAsset = inlineResponse ? null : await fetchAssetBinary(url, auth);
+				const bytes = inlineResponse
+					? await inlineResponse.arrayBuffer()
+					: remoteAsset!.bytes;
+				const contentType =
+					inlineResponse?.headers.get("content-type") ||
+					remoteAsset?.contentType ||
+					"";
+				const format = detectModelFormat(url, explicitFormat, contentType, bytes);
 
 				console.log(
 					"Loading model format:",
 					format,
 					"from explicitFormat:",
-					explicitFormat
+					explicitFormat,
+					"byteLength:",
+					bytes.byteLength
 				);
 
 				if (format === "glb" || format === "gltf") {
-					// GLB/GLTF loading (TRELLIS output)
 					const gltfLoader = new GLTFLoader();
-					gltfLoader.load(
-						loadUrl,
+					const payload =
+						format === "glb" ? bytes : new TextDecoder().decode(new Uint8Array(bytes));
+					gltfLoader.parse(
+						payload,
+						"",
 						(gltf) => {
 							if (cancelled) return;
 
-							// Find the first mesh in the GLTF scene
-							const meshes: THREE.Mesh[] = [];
-							gltf.scene.traverse((child) => {
+							const scene = gltf.scene.clone(true);
+							let meshCount = 0;
+							scene.traverse((child) => {
 								if (child instanceof THREE.Mesh) {
-									meshes.push(child);
+									meshCount += 1;
+									child.geometry = child.geometry.clone();
+									if (Array.isArray(child.material)) {
+										child.material = child.material.map(normalizeMaterial);
+									} else {
+										child.material = normalizeMaterial(child.material);
+									}
 								}
 							});
 
-							if (meshes.length === 0) {
+							if (meshCount === 0) {
 								setError("GLB has no geometry");
 								return;
 							}
 
-							const firstMesh = meshes[0];
-							const geo = firstMesh.geometry.clone();
-
-							geo.computeBoundingBox();
-							geo.center();
-
-							const bbox = geo.boundingBox!;
-							const size = new THREE.Vector3();
-							bbox.getSize(size);
+							const bbox = new THREE.Box3().setFromObject(scene);
+							const size = bbox.getSize(new THREE.Vector3());
+							const center = bbox.getCenter(new THREE.Vector3());
 							const maxDim = Math.max(size.x, size.y, size.z);
 							setModelScale(maxDim > 0 ? 2 / maxDim : 1);
-
-							// Clone and preserve the original material with textures
-							const originalMat = firstMesh.material;
-							if (originalMat) {
-								if (Array.isArray(originalMat)) {
-									setMaterial(originalMat.map((m) => m.clone()));
-								} else {
-									setMaterial(originalMat.clone());
-								}
-
-								// Check if material has textures (map property)
-								const checkTexture = (m: THREE.Material): boolean => {
-									if ("map" in m && (m as THREE.MeshStandardMaterial).map)
-										return true;
-									if (
-										"emissiveMap" in m &&
-										(m as THREE.MeshStandardMaterial).emissiveMap
-									)
-										return true;
-									if (
-										"normalMap" in m &&
-										(m as THREE.MeshStandardMaterial).normalMap
-									)
-										return true;
-									return false;
-								};
-
-								const hasTex = Array.isArray(originalMat)
-									? originalMat.some(checkTexture)
-									: checkTexture(originalMat);
-								setHasTexture(hasTex);
-								const firstMat = Array.isArray(originalMat)
-									? originalMat[0]
-									: originalMat;
-								console.log("GLB material detected:", {
-									hasTexture: hasTex,
-									materialType: firstMat?.constructor.name,
-									map:
-										firstMat && "map" in firstMat
-											? !!(firstMat as THREE.MeshStandardMaterial).map
-											: false,
-								});
-							}
-
-							// Check if the material has vertex colors
-							const mat = firstMesh.material;
-							if (mat && !Array.isArray(mat) && "vertexColors" in mat) {
-								setHasVertexColors(
-									(mat as THREE.MeshStandardMaterial).vertexColors
-								);
-							} else {
-								setHasVertexColors(false);
-							}
+							scene.position.sub(center);
 
 							console.log("GLB loaded successfully");
-							setGeometry(geo);
+							setSceneObject(scene);
 						},
-						undefined,
 						(error) => {
 							console.error("GLB load error:", error);
 							if (!cancelled) setError("Failed to load GLB");
@@ -236,154 +206,142 @@ function Model({
 					);
 				} else if (format === "obj") {
 					const objLoader = new OBJLoader();
-					objLoader.load(
-						loadUrl,
-						(obj) => {
-							if (cancelled) return;
-							obj.traverse((child) => {
-								if (child instanceof THREE.Mesh) {
-									const geo = child.geometry.clone();
-									// Rotate from Z-up to Y-up coordinate system
-									geo.rotateX(-Math.PI / 2);
-									geo.computeBoundingBox();
-									geo.center();
+					try {
+						const obj = objLoader.parse(new TextDecoder().decode(new Uint8Array(bytes)));
+						if (cancelled) return;
+						obj.traverse((child) => {
+							if (child instanceof THREE.Mesh) {
+								const geo = child.geometry.clone();
+								geo.rotateX(-Math.PI / 2);
+								geo.computeBoundingBox();
+								geo.center();
 
-									const bbox = geo.boundingBox!;
-									const size = new THREE.Vector3();
-									bbox.getSize(size);
-									const maxDim = Math.max(size.x, size.y, size.z);
-									setModelScale(maxDim > 0 ? 2 / maxDim : 1);
+								const bbox = geo.boundingBox!;
+								const size = new THREE.Vector3();
+								bbox.getSize(size);
+								const maxDim = Math.max(size.x, size.y, size.z);
+								setModelScale(maxDim > 0 ? 2 / maxDim : 1);
 
-									setGeometry(geo);
-								}
-							});
-						},
-						undefined,
-						() => {
-							if (!cancelled) setError("Failed to load OBJ");
+								setGeometry(geo);
+							}
+						});
+					} catch (error) {
+						console.error("OBJ load error:", error);
+						if (!cancelled) {
+							setError("Failed to load OBJ");
 						}
-					);
+					}
 				} else if (format === "ply") {
 					const plyLoader = new PLYLoader();
-					plyLoader.load(
-						loadUrl,
-						(geo) => {
-							if (cancelled) {
-								geo.dispose();
-								return;
-							}
-
-							const posAttr = geo.getAttribute("position");
-							if (!posAttr || posAttr.count === 0) {
-								setError("PLY has no geometry");
-								geo.dispose();
-								return;
-							}
-
-							// Rotate from Z-up (Shap-E) to Y-up (Three.js) coordinate system
-							geo.rotateX(-Math.PI / 2);
-
-							geo.computeVertexNormals();
-							geo.computeBoundingBox();
-
-							// Check and enhance vertex colors if present
-							const colorAttr = geo.getAttribute("color");
-							if (colorAttr) {
-								console.log("PLY has vertex colors, count:", colorAttr.count);
-
-								// Analyze color range
-								let maxColor = 0;
-								for (let i = 0; i < colorAttr.count * 3; i++) {
-									maxColor = Math.max(maxColor, colorAttr.array[i]);
-								}
-								console.log("Max color value:", maxColor);
-
-								// Enhance colors - normalize and brighten
-								const enhancedColors = new Float32Array(colorAttr.array.length);
-								const normalize = maxColor > 1 ? 255 : 1;
-
-								for (let i = 0; i < colorAttr.count; i++) {
-									const r = colorAttr.array[i * 3] / normalize;
-									const g = colorAttr.array[i * 3 + 1] / normalize;
-									const b = colorAttr.array[i * 3 + 2] / normalize;
-
-									// Apply gamma correction + saturation boost to brighten colors
-									const gamma = 0.5;
-									// Boost saturation by increasing distance from gray
-									const avg = (r + g + b) / 3;
-									const satBoost = 1.4;
-									let sr = avg + (r - avg) * satBoost;
-									let sg = avg + (g - avg) * satBoost;
-									let sb = avg + (b - avg) * satBoost;
-									// Clamp, then apply gamma
-									sr = Math.max(0, Math.min(1, sr));
-									sg = Math.max(0, Math.min(1, sg));
-									sb = Math.max(0, Math.min(1, sb));
-									enhancedColors[i * 3] = Math.min(1, Math.pow(sr, gamma));
-									enhancedColors[i * 3 + 1] = Math.min(1, Math.pow(sg, gamma));
-									enhancedColors[i * 3 + 2] = Math.min(1, Math.pow(sb, gamma));
-								}
-
-								geo.setAttribute(
-									"color",
-									new THREE.BufferAttribute(enhancedColors, 3)
-								);
-								console.log("Enhanced vertex colors with gamma correction");
-								setHasVertexColors(true);
-							} else {
-								console.log("PLY has no vertex colors");
-								setHasVertexColors(false);
-							}
-
-							const bbox = geo.boundingBox!;
-							const size = new THREE.Vector3();
-							bbox.getSize(size);
-							const maxDim = Math.max(size.x, size.y, size.z);
-
-							setModelScale(maxDim > 0 ? 2 / maxDim : 1);
-
-							geo.center();
-							setGeometry(geo);
-						},
-						undefined,
-						() => {
-							if (!cancelled) setError("Failed to load PLY");
+					try {
+						const geo = plyLoader.parse(bytes);
+						if (cancelled) {
+							geo.dispose();
+							return;
 						}
-					);
+
+						const posAttr = geo.getAttribute("position");
+						if (!posAttr || posAttr.count === 0) {
+							setError("PLY has no geometry");
+							geo.dispose();
+							return;
+						}
+
+						geo.rotateX(-Math.PI / 2);
+						geo.computeVertexNormals();
+						geo.computeBoundingBox();
+
+						const colorAttr = geo.getAttribute("color");
+						if (colorAttr) {
+							console.log("PLY has vertex colors, count:", colorAttr.count);
+
+							let maxColor = 0;
+							for (let i = 0; i < colorAttr.count * 3; i++) {
+								maxColor = Math.max(maxColor, colorAttr.array[i]);
+							}
+
+							const enhancedColors = new Float32Array(colorAttr.array.length);
+							const normalize = maxColor > 1 ? 255 : 1;
+
+							for (let i = 0; i < colorAttr.count; i++) {
+								const r = colorAttr.array[i * 3] / normalize;
+								const g = colorAttr.array[i * 3 + 1] / normalize;
+								const b = colorAttr.array[i * 3 + 2] / normalize;
+
+								const gamma = 0.5;
+								const avg = (r + g + b) / 3;
+								const satBoost = 1.4;
+								let sr = avg + (r - avg) * satBoost;
+								let sg = avg + (g - avg) * satBoost;
+								let sb = avg + (b - avg) * satBoost;
+								sr = Math.max(0, Math.min(1, sr));
+								sg = Math.max(0, Math.min(1, sg));
+								sb = Math.max(0, Math.min(1, sb));
+								enhancedColors[i * 3] = Math.min(1, Math.pow(sr, gamma));
+								enhancedColors[i * 3 + 1] = Math.min(1, Math.pow(sg, gamma));
+								enhancedColors[i * 3 + 2] = Math.min(1, Math.pow(sb, gamma));
+							}
+
+							geo.setAttribute(
+								"color",
+								new THREE.BufferAttribute(enhancedColors, 3)
+							);
+							setHasVertexColors(true);
+						} else {
+							setHasVertexColors(false);
+						}
+
+						const bbox = geo.boundingBox!;
+						const size = new THREE.Vector3();
+						bbox.getSize(size);
+						const maxDim = Math.max(size.x, size.y, size.z);
+
+						setModelScale(maxDim > 0 ? 2 / maxDim : 1);
+
+						geo.center();
+						setGeometry(geo);
+					} catch (error) {
+						console.error("PLY load error:", error);
+						if (!cancelled) {
+							setError("Failed to load PLY");
+						}
+					}
 				} else {
-					// Try GLB as fallback for unknown formats
-					console.log("Unknown format, trying GLB loader as fallback");
+					console.log("Unknown format, trying GLB parser as fallback");
 					const gltfLoader = new GLTFLoader();
-					gltfLoader.load(
-						loadUrl,
+					gltfLoader.parse(
+						bytes,
+						"",
 						(gltf) => {
 							if (cancelled) return;
 
-							const meshes: THREE.Mesh[] = [];
-							gltf.scene.traverse((child) => {
+							const scene = gltf.scene.clone(true);
+							let meshCount = 0;
+							scene.traverse((child) => {
 								if (child instanceof THREE.Mesh) {
-									meshes.push(child);
+									meshCount += 1;
+									child.geometry = child.geometry.clone();
+									if (Array.isArray(child.material)) {
+										child.material = child.material.map(normalizeMaterial);
+									} else {
+										child.material = normalizeMaterial(child.material);
+									}
 								}
 							});
 
-							if (meshes.length === 0) {
+							if (meshCount === 0) {
 								setError("No geometry found");
 								return;
 							}
 
-							const geo = meshes[0].geometry.clone();
-							geo.computeBoundingBox();
-							geo.center();
-
-							const bbox = geo.boundingBox!;
-							const size = new THREE.Vector3();
-							bbox.getSize(size);
+							const bbox = new THREE.Box3().setFromObject(scene);
+							const size = bbox.getSize(new THREE.Vector3());
+							const center = bbox.getCenter(new THREE.Vector3());
+							scene.position.sub(center);
 							const maxDim = Math.max(size.x, size.y, size.z);
 							setModelScale(maxDim > 0 ? 2 / maxDim : 1);
-							setHasVertexColors(false);
-							setGeometry(geo);
+							setSceneObject(scene);
 						},
-						undefined,
 						() => {
 							if (!cancelled) setError("Unsupported format");
 						}
@@ -400,7 +358,7 @@ function Model({
 		return () => {
 			cancelled = true;
 		};
-	}, [url]);
+	}, [auth, explicitFormat, url]);
 
 	// Compute final scale
 	const finalScale = useMemo<[number, number, number]>(
@@ -417,6 +375,22 @@ function Model({
 		);
 	}
 
+	if (sceneObject) {
+		return (
+			<group
+				position={position}
+				rotation={rotation}
+				scale={finalScale}
+				onClick={(e) => {
+					e.stopPropagation();
+					onSelect();
+				}}
+			>
+				<primitive object={sceneObject} />
+			</group>
+		);
+	}
+
 	if (!geometry) {
 		return (
 			<mesh position={position}>
@@ -428,7 +402,6 @@ function Model({
 
 	return (
 		<mesh
-			ref={meshRef}
 			geometry={geometry}
 			position={position}
 			rotation={rotation}
@@ -437,34 +410,22 @@ function Model({
 				e.stopPropagation();
 				onSelect();
 			}}
-			// Use preserved material if it has textures
-			material={
-				hasTexture && material
-					? Array.isArray(material)
-						? material[0]
-						: material
-					: undefined
-			}
 		>
-			{/* Only render fallback materials if no texture material */}
-			{!hasTexture &&
-				(hasVertexColors ? (
-					// Use MeshBasicMaterial for vertex colors - doesn't need lighting
-					<meshBasicMaterial
-						vertexColors
-						side={THREE.DoubleSide}
-						opacity={isSelected ? 0.9 : 1}
-						transparent={isSelected}
-					/>
-				) : (
-					// Fall back to standard material for models without vertex colors
-					<meshStandardMaterial
-						color={isSelected ? "#00ff88" : "#cccccc"}
-						metalness={0.2}
-						roughness={0.5}
-						side={THREE.DoubleSide}
-					/>
-				))}
+			{hasVertexColors ? (
+				<meshBasicMaterial
+					vertexColors
+					side={THREE.DoubleSide}
+					opacity={isSelected ? 0.9 : 1}
+					transparent={isSelected}
+				/>
+			) : (
+				<meshStandardMaterial
+					color={isSelected ? "#00ff88" : "#cccccc"}
+					metalness={0.1}
+					roughness={0.8}
+					side={THREE.DoubleSide}
+				/>
+			)}
 		</mesh>
 	);
 }
@@ -530,7 +491,8 @@ export default function Scene3D({
 	viewOnly = false,
 	objects: propObjects,
 }: Scene3DProps) {
-	const { sceneObjects, selectedObjectId, setSelectedObjectId } = useAppStore();
+	const { sceneObjects, selectedObjectId, setSelectedObjectId, user, session } =
+		useAppStore();
 	const displayObjects = propObjects || sceneObjects;
 	const [canvasKey, setCanvasKey] = useState(0);
 
@@ -555,8 +517,10 @@ export default function Scene3D({
 					gl.domElement.addEventListener("webglcontextlost", handleContextLost);
 				}}
 			>
-				<ambientLight intensity={0.8} />
-				<directionalLight position={[5, 10, 5]} intensity={0.8} />
+				<ambientLight intensity={1.1} />
+				<hemisphereLight args={["#ffffff", "#0f172a", 1.25]} />
+				<directionalLight position={[5, 10, 5]} intensity={1.6} />
+				<directionalLight position={[-4, 6, -3]} intensity={0.8} />
 
 				<Suspense fallback={null}>
 					{showGiftPreview ? (
@@ -565,12 +529,12 @@ export default function Scene3D({
 						displayObjects.map((obj) => (
 							<Model
 								key={obj.id}
-								id={obj.id}
 								url={obj.url}
 								format={obj.format}
 								position={obj.position}
 								rotation={obj.rotation}
 								scale={obj.scale}
+								auth={{ user, session }}
 								isSelected={selectedObjectId === obj.id}
 								onSelect={() => !viewOnly && setSelectedObjectId(obj.id)}
 							/>

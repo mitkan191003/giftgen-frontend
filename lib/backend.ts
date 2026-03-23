@@ -175,6 +175,49 @@ export function buildAssetUrl(asset: AssetRecord): string | null {
   return `${BACKEND_URL}${asset.download_url}`;
 }
 
+function isBackendAssetUrl(assetUrl: string): boolean {
+  if (!BACKEND_URL) {
+    return assetUrl.startsWith("/");
+  }
+
+  try {
+    const backendOrigin = new URL(BACKEND_URL).origin;
+    return new URL(assetUrl, backendOrigin).origin === backendOrigin;
+  } catch {
+    return assetUrl.startsWith("/");
+  }
+}
+
+export async function fetchAssetBinary(
+  assetUrl: string,
+  auth?: BackendAuthContext
+): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const requestId = generateRequestId();
+  const headers: Record<string, string> = {};
+  const shouldAttachAuth = isBackendAssetUrl(assetUrl) && Boolean(auth?.user);
+
+  if (shouldAttachAuth) {
+    Object.assign(headers, buildHeaders(auth, requestId));
+    delete headers["Content-Type"];
+  }
+
+  const response = await fetch(assetUrl, {
+    method: "GET",
+    headers,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    const responseRequestId = response.headers.get("x-request-id") || requestId;
+    throw new Error(`${text || "Failed to fetch asset"} [request_id=${responseRequestId}]`);
+  }
+
+  return {
+    bytes: await response.arrayBuffer(),
+    contentType: response.headers.get("content-type") || "",
+  };
+}
+
 export function inferModelFormat(asset: AssetRecord): string {
   const key = asset.storage_key.toLowerCase();
   if (asset.mime_type === "model/gltf-binary" || key.endsWith(".glb")) return "glb";
