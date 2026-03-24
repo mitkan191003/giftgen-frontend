@@ -42,8 +42,8 @@ Variables:
 
 Deployed environment recommendation:
 
-- Dev, staging, and prod should all use `NEXT_PUBLIC_AUTH_MODE=cognito`
-- Dev, staging, and prod should all use `NEXT_PUBLIC_BACKEND_AUTH_MODE=cognito`
+- Dev and prod should both use `NEXT_PUBLIC_AUTH_MODE=cognito`
+- Dev and prod should both use `NEXT_PUBLIC_BACKEND_AUTH_MODE=cognito`
 - `development` mode should only be used for local iteration when you intentionally are not using Cognito
 
 ## Development
