@@ -1,68 +1,94 @@
 # GiftGen Frontend
 
-This frontend is a port of the old reference experience onto the current stack:
+GiftGen Frontend is the user-facing web application for GiftGen.
 
-- Cognito Hosted UI with PKCE for real auth
-- FastAPI backend on AWS for creations, jobs, shares, and asset delivery
-- Modal generation invoked through the backend
-- S3 or local backend storage for generated models
+It is a Next.js app that handles sign-in, the prompt-to-generation experience, 3D preview and share pages, and the general browsing experience around finished gifts. In production it is designed to live on Vercel and talk directly to the backend API.
 
-There is no Supabase or frontend-owned API layer in this app anymore. The Next app talks directly to the backend.
+## Related Repositories
 
-## Core Flows
+- [giftgen-backend](https://github.com/mitkan191003/giftgen-backend): the API, worker, and deployment chart
+- [giftgen-infra](https://github.com/mitkan191003/giftgen-infra): Terraform and delivery infrastructure for AWS, ArgoCD, Cognito, DNS, and environment setup
 
-- `/`: sign in through Cognito or use development auth when Cognito is not configured
-- `/studio`: generate a gift, poll the backend job, preview the model, and create a share link
-- `/my-gifts`: browse the current user’s generated gifts
-- `/unwrap` and `/share/[slug]`: load a public or unlisted shared gift and reveal it in the 3D viewer
+## Where This Repo Fits
 
-## Environment
+This repository is the presentation layer of the project.
 
-Copy `.env.example` to `.env.local` and fill in the real values for the environment you are running:
+Its job is to:
 
-```bash
-cp .env.example .env.local
-```
+- handle sign-in and session UX
+- guide the user through the gift creation flow
+- submit generation requests to the backend
+- poll for job completion
+- render generated 3D assets
+- expose personal gift history and public share pages
 
-Variables:
+The frontend does not own the application database and it does not talk directly to generation providers. That work happens in the backend. The frontend’s role is to make that flow usable and understandable.
 
-- `NEXT_PUBLIC_BACKEND_URL`: base URL for the FastAPI backend, for example `https://api.giftgen-dev.mithrak.com`
-- `NEXT_PUBLIC_BACKEND_AUTH_MODE`: `cognito` for deployed environments, `development` only for local fallback mode
-- `NEXT_PUBLIC_AUTH_MODE`: `development` or `cognito`
-- `NEXT_PUBLIC_COGNITO_DOMAIN`: Cognito Hosted UI domain
-- `NEXT_PUBLIC_COGNITO_CLIENT_ID`: Cognito app client id for the frontend
-- `NEXT_PUBLIC_COGNITO_REDIRECT_URI`: exact callback URL registered in Cognito
-- `NEXT_PUBLIC_COGNITO_LOGOUT_URI`: exact logout URL registered in Cognito
-- `NEXT_PUBLIC_SENTRY_DSN`: optional browser-side Sentry DSN
-- `NEXT_PUBLIC_SENTRY_ENVIRONMENT`: optional frontend Sentry environment label
-- `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE`: optional frontend trace sampling rate
-- `SENTRY_DSN`: optional server-side Sentry DSN for Next.js runtime errors
-- `SENTRY_ENVIRONMENT`: optional server-side Sentry environment label
-- `SENTRY_TRACES_SAMPLE_RATE`: optional server-side trace sampling rate
+## Main Areas of the App
 
-Deployed environment recommendation:
+- `/` for landing and sign-in
+- `/studio` for creation and generation
+- `/my-gifts` for the authenticated library view
+- `/share/[slug]` and related share routes for public or unlisted gift pages
 
-- Dev and prod should both use `NEXT_PUBLIC_AUTH_MODE=cognito`
-- Dev and prod should both use `NEXT_PUBLIC_BACKEND_AUTH_MODE=cognito`
-- `development` mode should only be used for local iteration when you intentionally are not using Cognito
+## Getting Started
 
-## Development
+### Requirements
+
+- Node.js 20+
+- `pnpm`
+
+### Local Setup
+
+1. Install dependencies.
+2. Copy `.env.example` to `.env.local`.
+3. Point the frontend at a running backend.
+4. Start the development server.
 
 ```bash
 pnpm install
-pnpm run dev
+cp .env.example .env.local
+pnpm dev
 ```
 
-## Build
+The default local setup expects a backend running at `http://localhost:8000`.
 
-```bash
-pnpm run build
-```
+## Configuration
 
-## Notes
+The main environment variables are:
 
-- The reference 3D experience, studio layout, unwrap flow, and share flow were kept and adapted to the current backend contracts.
-- Asset rendering now depends on backend asset URLs rather than direct storage-provider URLs.
-- The frontend now sends the Cognito ID token as the backend bearer token when backend auth mode is `cognito`.
-- The frontend now generates an `X-Request-Id` for every backend request so browser failures can be correlated with API logs.
-- Sentry is wired for App Router projects but remains dormant until the DSN env vars are set.
+- `NEXT_PUBLIC_BACKEND_URL`
+- `NEXT_PUBLIC_BACKEND_AUTH_MODE`
+- `NEXT_PUBLIC_AUTH_MODE`
+- `NEXT_PUBLIC_COGNITO_DOMAIN`
+- `NEXT_PUBLIC_COGNITO_CLIENT_ID`
+- `NEXT_PUBLIC_COGNITO_REDIRECT_URI`
+- `NEXT_PUBLIC_COGNITO_LOGOUT_URI`
+
+For local work, the app can run in development auth mode. For deployed environments, it is intended to use Cognito-backed authentication and a real backend URL.
+
+## Deployment
+
+This repository is intended for Vercel deployment.
+
+In the full project architecture:
+
+- Vercel serves the Next.js app
+- the backend runs separately on AWS
+- Cognito handles authentication
+- generated assets are retrieved through backend-managed routes
+
+That split keeps the frontend focused on user experience rather than platform orchestration.
+
+## Tech Stack
+
+- Next.js
+- React
+- TypeScript
+- Three.js via React Three Fiber and Drei
+- Cognito Hosted UI for authentication
+- Sentry support for frontend error monitoring
+
+## Further Reading
+
+- [.env.example](.env.example)
