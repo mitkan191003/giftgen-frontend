@@ -26,7 +26,7 @@ cp .env.example .env.local
 
 Variables:
 
-- `NEXT_PUBLIC_BACKEND_URL`: base URL for the FastAPI backend, for example `https://api-dev.giftgen.mithrak.com`
+- `NEXT_PUBLIC_BACKEND_URL`: base URL for the FastAPI backend, for example `https://api.giftgen-dev.mithrak.com`
 - `NEXT_PUBLIC_BACKEND_AUTH_MODE`: `cognito` for deployed environments, `development` only for local fallback mode
 - `NEXT_PUBLIC_AUTH_MODE`: `development` or `cognito`
 - `NEXT_PUBLIC_COGNITO_DOMAIN`: Cognito Hosted UI domain
